@@ -28,11 +28,11 @@ func main() {
 	go startServer(addr)
 	// 使用了通道addr，能够确保服务端端口监听成功，客户端再发起请求
 	// 即服务端端口监听成功后，会将监听的地址发送到通道中，addr是无缓冲通道，客户端会阻塞直到服务端端口监听成功
-	// 建立连接，与服务端进行协议协商，创建客户端实例
 	client, _ := srpc.Dial("tcp", <-addr)
 	defer func() { _ = client.Close() }()
 
 	time.Sleep(time.Second)
+	// 发送选项，创建关联网络连接的json编码器，并将默认选项写入连接
 
 	var wg sync.WaitGroup
 	for i := 0; i < 5; i++ {
@@ -41,8 +41,6 @@ func main() {
 			defer wg.Done()
 			args := fmt.Sprintf("srpc req %d", i)
 			var reply string
-			// 客户端向连接中注入数据
-			// Call方法会阻塞等待服务端响应才返回
 			if err := client.Call("Foo.Sum", args, &reply); err != nil {
 				log.Fatal("call Foo.Sum error:", err)
 			}

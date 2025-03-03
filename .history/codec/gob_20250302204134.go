@@ -13,8 +13,8 @@ import (
 type GobCodec struct {
 	conn io.ReadWriteCloser // 链接实例，负责字节流传输
 	buf  *bufio.Writer      // 为防止阻塞而创建的带缓冲的Writer
-	dec  *gob.Decoder       // 解码器，从conn中读取数据
-	enc  *gob.Encoder       // 编码器，写入到buf缓冲区
+	dec  *gob.Decoder       // 解码器
+	enc  *gob.Encoder       // 编码器
 }
 
 // 接口实现的编译期断言，不会产生任何运行时开销，确保GobCodec必须完整实现Codec接口才能通过编译
@@ -39,10 +39,9 @@ func (c *GobCodec) ReadBody(body interface{}) error {
 	return c.dec.Decode(body)
 }
 
-// 写入操作，将内容编码后写入GobCodec的buf中，自动缓冲管理，defer保证Flush
+// 写入操作，自动缓冲管理，defer保证Flush
 func (c *GobCodec) Write(h *Header, body interface{}) (err error) {
 	defer func() {
-		// 将缓冲中的数据写入连接
 		_ = c.buf.Flush()
 		if err != nil {
 			_ = c.Close()
