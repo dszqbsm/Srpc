@@ -30,11 +30,7 @@ var DefaultOption = &Option{
 }
 
 type Server struct {
-	// sync.Map替代普通map+互斥锁，能够提升并发读写性能，适合读多写少的场景
-	// 无需显式加锁，通过sync.Map内部原子操作和分片设计，实现读操作的并发安全
-	// 写操作优化，LoadOrStore方法通过原子操作实现存在即返回，不存在即写入
-	// 自动管理内存分配，避免频繁扩容带来的性能抖动
-	serviceMap sync.Map // 并发安全服务注册表
+	serviceMap sync.Map
 }
 
 func NewServer() *Server {
@@ -43,10 +39,8 @@ func NewServer() *Server {
 
 var DefaulServer = NewServer()
 
-// 注册服务实例
 func (server *Server) Register(rcvr interface{}) error {
 	s := newService(rcvr)
-	// 原子操作检查服务名是否已存在，存在即返回，不存在即写入
 	if _, dup := server.serviceMap.LoadOrStore(s.name, s); dup {
 		return fmt.Errorf("rpc: service already defined: %s", s.name)
 	}
@@ -57,23 +51,19 @@ func Register(rcvr interface{}) error {
 	return DefaulServer.Register(rcvr)
 }
 
-// 解析Service.Method格式的方法路径
 func (server *Server) findService(serviceMethod string) (svc *service, mtype *methodType, err error) {
-	// 解析Service.Method格式的方法路径，获取服务名和方法名
 	dot := strings.LastIndex(serviceMethod, ".")
 	if dot < 0 {
 		err = errors.New("rpc server: service/method request ill-formed: " + serviceMethod)
 		return
 	}
 	serviceName, methodName := serviceMethod[:dot], serviceMethod[dot+1:]
-	// 一级查找服务
 	svci, ok := server.serviceMap.Load(serviceName)
 	if !ok {
 		err = errors.New("rpc server: can't find service " + serviceName)
 		return
 	}
 	svc = svci.(*service)
-	// 二级查找方法
 	mtype = svc.method[methodName]
 	if mtype == nil {
 		err = errors.New("rpc server: can't find method " + methodName)
@@ -163,9 +153,7 @@ func (server *Server) serveCodec(cc codec.Codec) {
 
 type request struct {
 	h            *codec.Header
-	argv, replyv reflect.Value // argv是方法输入参数；replyv是方法输出参数
-	mtype        *methodType
-	svc          *service
+	argv, replyv reflect.Value
 }
 
 // 读取请求头
@@ -191,30 +179,11 @@ func (server *Server) readRequest(cc codec.Codec) (*request, error) {
 	}
 	req := &request{h: h}
 
-	/* 	// TODO: 现在我们不知道请求参数类型，只支持string类型
-	   	// 使用反射机制获取字符串类型的反射类型对象，通过Interface()获取真实的指针并按string类型解码到该指针的内容中
-	   	req.argv = reflect.New(reflect.TypeOf(""))
-	   	if err = cc.ReadBody(req.argv.Interface()); err != nil {
-	   		log.Println("rpc server: read argv err:", err)
-	   	}
-	   	return req, nil */
-	req.svc, req.mtype, err = server.findService(req.h.ServiceMethod)
-	if err != nil {
-		return req, err
-	}
-	// 根据请求的参数类型，创建对应的入参实例
-	req.argv = req.mtype.newArgv()
-	req.replyv = req.mtype.newReplyv()
-
-	// 将入参类型统一转化为指针类型
-	argvi := req.argv.Interface()
-	if req.argv.Type().Kind() != reflect.Ptr {
-		// 若入参类型不为指针，则取入参地址转化为指针类型
-		argvi = req.argv.Addr().Interface()
-	}
-	if err = cc.ReadBody(argvi); err != nil {
+	// TODO: 现在我们不知道请求参数类型，只支持string类型
+	// 使用反射机制获取字符串类型的反射类型对象，通过Interface()获取真实的指针并按string类型解码到该指针的内容中
+	req.argv = reflect.New(reflect.TypeOf(""))
+	if err = cc.ReadBody(req.argv.Interface()); err != nil {
 		log.Println("rpc server: read argv err:", err)
-		return req, err
 	}
 	return req, nil
 }
@@ -235,14 +204,7 @@ func (server *Server) handleRequest(cc codec.Codec, req *request, sending *sync.
 	// 应该调用注册rpc方法来获得正确的回复
 	// 暂时只打印参数并回复一个hello消息
 	defer wg.Done()
-	/* 	log.Println(req.h, req.argv.Elem())
-	   	req.replyv = reflect.ValueOf(fmt.Sprintf("srpc resp %d", req.h.Seq))
-	   	server.sendResponse(cc, req.h, req.replyv.Interface(), sending) */
-	err := req.svc.call(req.mtype, req.argv, req.replyv)
-	if err != nil {
-		req.h.Error = err.Error()
-		server.sendResponse(cc, req.h, invalidRequest, sending)
-		return
-	}
+	log.Println(req.h, req.argv.Elem())
+	req.replyv = reflect.ValueOf(fmt.Sprintf("srpc resp %d", req.h.Seq))
 	server.sendResponse(cc, req.h, req.replyv.Interface(), sending)
 }

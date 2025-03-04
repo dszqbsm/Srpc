@@ -26,14 +26,13 @@ func startServer(addr chan string) {
 	if err := srpc.Register(&foo); err != nil {
 		log.Fatal("register error:", err)
 	}
-	// 启动端口监听
+	// 监听端口
 	l, err := net.Listen("tcp", ":0")
 	if err != nil {
 		log.Fatal("network error:", err)
 	}
 	log.Println("start rpc server on", l.Addr())
 	addr <- l.Addr().String()
-	// 启动rpc服务，等待客户端连接
 	srpc.Accept(l)
 }
 
@@ -63,7 +62,7 @@ func main() {
 			if err := client.Call("Foo.Sum", args, &reply); err != nil {
 				log.Fatal("call Foo.Sum error:", err)
 			}
-			log.Printf("%d + %d = %d", args.Num1, args.Num2, reply)
+			log.Println("%d + %d = %d", args.Num1, args.Num2, reply)
 		}(i)
 	}
 	wg.Wait()
