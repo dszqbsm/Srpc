@@ -253,13 +253,11 @@ func (server *Server) sendResponse(cc codec.Codec, h *codec.Header, body interfa
 */
 
 // 处理请求
-// 服务端处理报文，即Server.handleRequest超时：
 func (server *Server) handleRequest(cc codec.Codec, req *request, sending *sync.Mutex, wg *sync.WaitGroup, timeout time.Duration) {
 	defer wg.Done()
-	called := make(chan struct{}) // 用于通知服务方法调用已完成，不论成功失败
-	sent := make(chan struct{})   // 用于通知响应已通过编解码器发送完成，即响应发送完成，并释放了互斥锁
+	called := make(chan struct{})
+	sent := make(chan struct{})
 	go func() {
-		// 执行实际的服务方法
 		err := req.svc.call(req.mtype, req.argv, req.replyv)
 		called <- struct{}{}
 		if err != nil {
@@ -269,10 +267,9 @@ func (server *Server) handleRequest(cc codec.Codec, req *request, sending *sync.
 			return
 		}
 		server.sendResponse(cc, req.h, req.replyv.Interface(), sending)
-		sent <- struct{}{} // 但是这里可能已经超时了，而原goroutine还阻塞在这里，因为没有接收者
+		sent <- struct{}{}
 	}()
 
-	// 超时处理逻辑
 	if timeout == 0 {
 		<-called
 		<-sent

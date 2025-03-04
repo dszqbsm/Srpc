@@ -127,13 +127,13 @@ func (server *Server) ServeConn(conn io.ReadWriteCloser) {
 		return
 	}
 	// 处理完协商内容后，处理header和body内容，传入对应的编解码器
-	server.serveCodec(f(conn), &opt)
+	server.serveCodec(f(conn))
 }
 
 var invalidRequest = struct{}{}
 
 // 处理header和body内容，分为三步：读取请求、处理请求、回复请求
-func (server *Server) serveCodec(cc codec.Codec, opt *Option) {
+func (server *Server) serveCodec(cc codec.Codec) {
 	// 保证响应顺序
 	sending := new(sync.Mutex)
 	// 等待所有请求处理完毕
@@ -158,7 +158,7 @@ func (server *Server) serveCodec(cc codec.Codec, opt *Option) {
 		}
 		wg.Add(1)
 		// 每个请求独立协程处理
-		go server.handleRequest(cc, req, sending, wg, opt.HandleTimeout)
+		go server.handleRequest(cc, req, sending, wg)
 	}
 	// 阻塞等待所有handler协程完成
 	wg.Wait()
@@ -235,13 +235,13 @@ func (server *Server) sendResponse(cc codec.Codec, h *codec.Header, body interfa
 }
 
 // 处理请求
-/* func (server *Server) handleRequest(cc codec.Codec, req *request, sending *sync.Mutex, wg *sync.WaitGroup) {
+func (server *Server) handleRequest(cc codec.Codec, req *request, sending *sync.Mutex, wg *sync.WaitGroup) {
 	// 应该调用注册rpc方法来获得正确的回复
 	// 暂时只打印参数并回复一个hello消息
 	defer wg.Done()
 	/* 	log.Println(req.h, req.argv.Elem())
 	   	req.replyv = reflect.ValueOf(fmt.Sprintf("srpc resp %d", req.h.Seq))
-	   	server.sendResponse(cc, req.h, req.replyv.Interface(), sending)
+	   	server.sendResponse(cc, req.h, req.replyv.Interface(), sending) */
 	err := req.svc.call(req.mtype, req.argv, req.replyv)
 	if err != nil {
 		req.h.Error = err.Error()
@@ -249,40 +249,4 @@ func (server *Server) sendResponse(cc codec.Codec, h *codec.Header, body interfa
 		return
 	}
 	server.sendResponse(cc, req.h, req.replyv.Interface(), sending)
-}
-*/
-
-// 处理请求
-// 服务端处理报文，即Server.handleRequest超时：
-func (server *Server) handleRequest(cc codec.Codec, req *request, sending *sync.Mutex, wg *sync.WaitGroup, timeout time.Duration) {
-	defer wg.Done()
-	called := make(chan struct{}) // 用于通知服务方法调用已完成，不论成功失败
-	sent := make(chan struct{})   // 用于通知响应已通过编解码器发送完成，即响应发送完成，并释放了互斥锁
-	go func() {
-		// 执行实际的服务方法
-		err := req.svc.call(req.mtype, req.argv, req.replyv)
-		called <- struct{}{}
-		if err != nil {
-			req.h.Error = err.Error()
-			server.sendResponse(cc, req.h, invalidRequest, sending)
-			sent <- struct{}{}
-			return
-		}
-		server.sendResponse(cc, req.h, req.replyv.Interface(), sending)
-		sent <- struct{}{} // 但是这里可能已经超时了，而原goroutine还阻塞在这里，因为没有接收者
-	}()
-
-	// 超时处理逻辑
-	if timeout == 0 {
-		<-called
-		<-sent
-		return
-	}
-	select {
-	case <-time.After(timeout):
-		req.h.Error = fmt.Sprintf("rpc server: request handle timeout: expect within %s", timeout)
-		server.sendResponse(cc, req.h, invalidRequest, sending)
-	case <-called:
-		<-sent
-	}
 }

@@ -26,47 +26,37 @@ type Call struct {
 	Done          chan *Call // 用于支持异步调用
 }
 
-// 用于封装创建客户端的结果，使得通道一次性可以传递多个值
 type clientResult struct {
 	client *Client
 	err    error
 }
 
-// 通过抽象函数类型，使得dialTimeout函数能够接收不同的客户端创建函数作为参数
 type newClientFunc func(conn net.Conn, opt *Option) (*Client, error)
 
-// 建立rpc客户端连接，并处理超时逻辑，客户端向服务端打电话建立连接
-// 客户端创建连接时导致的超时：使用默认超时时间建立带有超时的连接，通过通道等待创建连接函数的返回结果，超时则失败，也支持用户自行定义Option配置超时时间，否则使用默认配置
 func dialTimeout(f newClientFunc, network, address string, opts ...*Option) (client *Client, err error) {
-	// 解析协商内容
 	opt, err := parseOptions(opts...)
 	if err != nil {
 		return nil, err
 	}
-	// 建立带超时的连接
+	// 连接超时
 	conn, err := net.DialTimeout(network, address, opt.ConnectTimeout)
 	if err != nil {
 		return nil, err
 	}
 	defer func() {
 		if client == nil {
-			// 只有NewClient失败时才需要关闭连接，错误处理
 			_ = conn.Close()
 		}
 	}()
-	// 结果通道
 	ch := make(chan clientResult)
-	// 启动协程执行客户端创建函数，并将结果发送到通道ch
 	go func() {
 		client, err := f(conn, opt)
 		ch <- clientResult{client: client, err: err}
 	}()
-	// 超时处理逻辑
-	if opt.ConnectTimeout == 0 { // 不启用超时控制，直接等待通道结果
+	if opt.ConnectTimeout == 0 {
 		result := <-ch
 		return result.client, result.err
 	}
-	// 使用select同时等待两个事件：超时或接收到结果
 	select {
 	case <-time.After(opt.ConnectTimeout):
 		return nil, fmt.Errorf("rpc client: connect timeout: expect within %s", opt.ConnectTimeout)
@@ -326,16 +316,12 @@ func (client *Client) GO(serviceMethod string, args, reply interface{}, done cha
 	return call.Error
 } */
 
-// rpc方法调用，允许调用方传入带有超时或取消信号的上下文
-// 客户端调用rpc方法整个过程导致的超时：通过context支持调用方设定整个过程超时时间
 func (client *Client) Call(ctx context.Context, serviceMethod string, args, reply interface{}) error {
 	call := client.GO(serviceMethod, args, reply, make(chan *Call, 1))
 	select {
-	// 超时触发
-	case <-ctx.Done(): // 返回一个通道，当Context被取消或超时时，通道会被关闭
+	case <-ctx.Done():
 		client.removeCall(call.Seq)
 		return errors.New("rpc client: call failed: " + ctx.Err().Error())
-		// 调用完成
 	case call := <-call.Done:
 		return call.Error
 	}

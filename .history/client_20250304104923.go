@@ -36,7 +36,7 @@ type clientResult struct {
 type newClientFunc func(conn net.Conn, opt *Option) (*Client, error)
 
 // 建立rpc客户端连接，并处理超时逻辑，客户端向服务端打电话建立连接
-// 客户端创建连接时导致的超时：使用默认超时时间建立带有超时的连接，通过通道等待创建连接函数的返回结果，超时则失败，也支持用户自行定义Option配置超时时间，否则使用默认配置
+// 客户端创建连接时导致的超时：使用默认超时时间建立带有超时的连接，通过通道等待创建连接函数的返回结果，超时则失败
 func dialTimeout(f newClientFunc, network, address string, opts ...*Option) (client *Client, err error) {
 	// 解析协商内容
 	opt, err := parseOptions(opts...)
