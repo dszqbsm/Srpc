@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net"
+	"net/http"
 	"sync"
 	"time"
 
@@ -24,29 +25,24 @@ func (f Foo) Sum(args Args, reply *int) error {
 func startServer(addr chan string) {
 	// 注册Foo到Server中，并启动rpc服务
 	var foo Foo
-	if err := srpc.Register(&foo); err != nil {
-		log.Fatal("register error:", err)
-	}
 	// 启动端口监听
-	l, err := net.Listen("tcp", ":0")
-	if err != nil {
-		log.Fatal("network error:", err)
-	}
-	log.Println("start rpc server on", l.Addr())
+	l, _ := net.Listen("tcp", ":9999")
+	// 注册服务
+	_ = srpc.Register(&foo)
+	// 绑定路由与对应的处理函数
+	srpc.HandleHTTP()
 	addr <- l.Addr().String()
 	// 启动rpc服务，等待客户端连接
-	srpc.Accept(l)
+	// srpc.Accept(l)
+	// 启动http服务器，监听指定端口并按路由调用对应的处理函数进行处理
+	_ = http.Serve(l, nil)
 }
 
-func main() {
-	// 设置日志输出格式，清楚所有格式标记，仅输出纯消息内容
-	log.SetFlags(0)
-	addr := make(chan string)
-	go startServer(addr)
+func call(addr chan string) {
 	// 使用了通道addr，能够确保服务端端口监听成功，客户端再发起请求
 	// 即服务端端口监听成功后，会将监听的地址发送到通道中，addr是无缓冲通道，客户端会阻塞直到服务端端口监听成功
 	// 建立连接，与服务端进行协议协商，创建客户端实例
-	client, _ := srpc.Dial("tcp", <-addr)
+	client, _ := srpc.DialHTTP("tcp", <-addr)
 	defer func() { _ = client.Close() }()
 
 	time.Sleep(time.Second)
@@ -68,4 +64,12 @@ func main() {
 		}(i)
 	}
 	wg.Wait()
+}
+
+func main() {
+	// 设置日志输出格式，清楚所有格式标记，仅输出纯消息内容
+	log.SetFlags(0)
+	addr := make(chan string)
+	go call(addr)
+	startServer(addr)
 }

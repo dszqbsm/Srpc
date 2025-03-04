@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"reflect"
 	"strings"
 	"sync"
@@ -195,13 +196,6 @@ func (server *Server) readRequest(cc codec.Codec) (*request, error) {
 	}
 	req := &request{h: h}
 
-	/* 	// TODO: 现在我们不知道请求参数类型，只支持string类型
-	   	// 使用反射机制获取字符串类型的反射类型对象，通过Interface()获取真实的指针并按string类型解码到该指针的内容中
-	   	req.argv = reflect.New(reflect.TypeOf(""))
-	   	if err = cc.ReadBody(req.argv.Interface()); err != nil {
-	   		log.Println("rpc server: read argv err:", err)
-	   	}
-	   	return req, nil */
 	req.svc, req.mtype, err = server.findService(req.h.ServiceMethod)
 	if err != nil {
 		return req, err
@@ -233,24 +227,6 @@ func (server *Server) sendResponse(cc codec.Codec, h *codec.Header, body interfa
 		log.Println("rpc server: write response error:", err)
 	}
 }
-
-// 处理请求
-/* func (server *Server) handleRequest(cc codec.Codec, req *request, sending *sync.Mutex, wg *sync.WaitGroup) {
-	// 应该调用注册rpc方法来获得正确的回复
-	// 暂时只打印参数并回复一个hello消息
-	defer wg.Done()
-	/* 	log.Println(req.h, req.argv.Elem())
-	   	req.replyv = reflect.ValueOf(fmt.Sprintf("srpc resp %d", req.h.Seq))
-	   	server.sendResponse(cc, req.h, req.replyv.Interface(), sending)
-	err := req.svc.call(req.mtype, req.argv, req.replyv)
-	if err != nil {
-		req.h.Error = err.Error()
-		server.sendResponse(cc, req.h, invalidRequest, sending)
-		return
-	}
-	server.sendResponse(cc, req.h, req.replyv.Interface(), sending)
-}
-*/
 
 // 处理请求
 // 服务端处理报文，即Server.handleRequest超时：
@@ -285,4 +261,50 @@ func (server *Server) handleRequest(cc codec.Codec, req *request, sending *sync.
 	case <-called:
 		<-sent
 	}
+}
+
+const (
+	connected        = "200 Connected to srpc"
+	defaultRPCPath   = "/_srpc_"
+	defaultDebugPath = "/debug/srpc"
+)
+
+// Server实现http.Handler接口，从而可以作为http请求的处理函数类型调用http.Handle传入参数
+func (server *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	// 检查请求方法是否为CONNECT
+	if req.Method != "CONNECT" {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		io.WriteString(w, "405 must CONNECT\n")
+		return
+	}
+	// 使用Hijacker接口劫持http链接，获取原始的tcp连接，即底层tcp套接字，通过conn可以直接操作原始字节流
+	// 劫持的目的是绕过http协议层的限制，直接基于tcp连接实现双向、长久的rpc通信协议
+	// 1. 劫持后，客户端和服务端可以通过同一个tcp连接持续交换数据，无需遵循http的一发一收规则
+	// 2. 可以实现自定义协议，因为直接操作字节流
+	// 3. rpc框架自行管理连接生命周期，连接不会自动关闭
+	// 4. 避免http层的头部、状态码等冗余信息，减少协议开销
+	conn, _, err := w.(http.Hijacker).Hijack()
+	if err != nil {
+		log.Print("rpc hijacking ", req.RemoteAddr, ": ", err.Error())
+		return
+	}
+	// 向客户端发送响应，表示连接已建立
+	_, _ = io.WriteString(conn, "HTTP/1.0 "+connected+"\n\n")
+	// 调用ServeConn方法开始处理rpc请求
+	server.ServeConn(conn)
+}
+
+// 注册http处理函数，将server注册为处理defaultRPCPath路径的http处理函数
+func (server *Server) HandleHTTP() {
+	// 将defaultRPCPath路径的http请求的处理逻辑绑定到server对象的ServeHTTP方法上
+	http.Handle(defaultRPCPath, server)
+	// 将defaultDebugPath路径的http请求的处理逻辑绑定到debugHTTP{server}对象的ServeHTTP方法上
+	http.Handle(defaultDebugPath, debugHTTP{server})
+	log.Println("rpc server debug path:", defaultDebugPath)
+}
+
+// 调用默认的rpc服务的HandleHTTP方法，注册默认的rpc路径
+func HandleHTTP() {
+	DefaulServer.HandleHTTP()
 }

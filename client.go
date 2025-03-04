@@ -1,6 +1,7 @@
 package srpc
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,8 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -237,29 +240,6 @@ func parseOptions(opts ...*Option) (*Option, error) {
 }
 
 // 建立连接
-/* func Dial(network, address string, opts ...*Option) (client *Client, err error) {
-	// 解析协商内容
-	opt, err := parseOptions(opts...)
-	if err != nil {
-		return nil, err
-	}
-	// 解析目标地址、创建tcp套接字、与服务端完成握手、返回可用于数据传输的连接对象
-	conn, err := net.Dial(network, address)
-	if err != nil {
-		return nil, err
-	}
-	// 关闭连接
-	defer func() {
-		// 只有NewClient失败时才需要关闭连接，错误处理
-		if client == nil {
-			_ = conn.Close()
-		}
-	}()
-	// 向服务端发送协商内容并创建客户端实例
-	return NewClient(conn, opt)
-} */
-
-// 建立连接
 func Dial(network, address string, opts ...*Option) (*Client, error) {
 	return dialTimeout(NewClient, network, address, opts...)
 }
@@ -316,16 +296,6 @@ func (client *Client) GO(serviceMethod string, args, reply interface{}, done cha
 	return call
 }
 
-// serviceMethod参数表示要调用的远程服务方法
-// 同步调用，阻塞等待从Done通道中获取数据
-/* func (client *Client) Call(serviceMethod string, args, reply interface{}) error {
-	// 创建带缓冲的完成通道，容量为1避免阻塞异步回调
-	// 阻塞等待服务端响应，保证完成一次请求，是同步rpc调用的语义，即让调用方可以用同步的方式编写代码，而时机底层是异步网络通信
-	// 通过Done通道，只有服务端响应后，才能从done通道中读取数据，这里体现的是客户端调用方对每一次发送请求的同步调用
-	call := <-client.GO(serviceMethod, args, reply, make(chan *Call, 1)).Done
-	return call.Error
-} */
-
 // rpc方法调用，允许调用方传入带有超时或取消信号的上下文
 // 客户端调用rpc方法整个过程导致的超时：通过context支持调用方设定整个过程超时时间
 func (client *Client) Call(ctx context.Context, serviceMethod string, args, reply interface{}) error {
@@ -338,5 +308,42 @@ func (client *Client) Call(ctx context.Context, serviceMethod string, args, repl
 		// 调用完成
 	case call := <-call.Done:
 		return call.Error
+	}
+}
+
+func NewHTTPClient(conn net.Conn, opt *Option) (*Client, error) {
+	// 向服务器发送connect请求，请求路径为defaultRPCPath
+	_, _ = io.WriteString(conn, fmt.Sprintf("CONNECT %s HTTP/1.0\n\n", defaultRPCPath))
+	// 阻塞读取服务器返回的http响应
+	resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: "CONNECT"})
+	// 检查响应状态是否为200 Connected to srpc，若响应正确则创建rpc客户端
+	if err == nil && resp.Status == connected {
+		return NewClient(conn, opt)
+	}
+	if err == nil {
+		err = errors.New("unexpected HTTP response: " + resp.Status)
+	}
+	return nil, err
+}
+
+func DialHTTP(network, address string, opts ...*Option) (*Client, error) {
+	return dialTimeout(NewHTTPClient, network, address, opts...)
+}
+
+// 简化调用，提供统一入口
+func XDial(rpcAddr string, opts ...*Option) (*Client, error) {
+	// 将rpc地址解析为协议和地址两部分
+	parts := strings.Split(rpcAddr, "@")
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("rpc client err: wrong format '%s', expect protocol@addr", rpcAddr)
+	}
+	// 根据协议选择连接方式
+	protocol, addr := parts[0], parts[1]
+	switch protocol {
+	case "http":
+		return DialHTTP("tcp", addr, opts...)
+	default:
+		// tcp, unix or other transport protocol
+		return Dial(protocol, addr, opts...)
 	}
 }
